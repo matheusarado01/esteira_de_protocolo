@@ -10,12 +10,16 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 
 DB_CONFIG = {
-    "host": os.getenv("DB_HOST", "localhost"),
-    "port": os.getenv("DB_PORT", "5433"),
-    "dbname": os.getenv("DB_NAME", "esteira_protocolo"),
-    "user": os.getenv("DB_USER", "postgres"),
-    "password": os.getenv("DB_PASS", "486975"),
+    "host": os.getenv("DB_HOST"),
+    "port": os.getenv("DB_PORT"),
+    "dbname": os.getenv("DB_NAME"),
+    "user": os.getenv("DB_USER"),
+    "password": os.getenv("DB_PASS"),
 }
+
+missing = [key for key, value in DB_CONFIG.items() if value is None]
+if missing:
+    raise ValueError(f"Missing database configuration for: {', '.join(missing)}")
 
 def get_conn():
     try:
