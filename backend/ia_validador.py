@@ -28,12 +28,24 @@ Seu papel é **validar a formalidade da resposta** (e-mail, anexos, minuta) para
 {json.dumps(campos_extraidos, ensure_ascii=False)}
 
 ### Critérios práticos:
-- O nome da minuta de resposta do anexo deve bater com os identificadores do assunto e/ou conteúdo.
-- Os identificadores do assunto (processo, FNDA, DILA, status) devem estar presentes no título/conteúdo dos anexos ou no texto da resposta.
-- Se o corpo ou a minuta mencionam "segue anexo", "documento em anexo", "assinatura em anexo", o respectivo documento deve estar anexo.
-- Se o status é "resposta final", deve haver informação conclusiva ou documento atendendo à ordem judicial. Diga qual é.
-- Se status é "dilação", a minuta deve conter pedido de dilação de prazo.
+- Toda resposta deve conter, no mínimo:
+  (a) uma minuta de resposta formal com os dados do processo, e
+  (b) um comprovante de assinatura válido da minuta.
+- Esses dois documentos (minuta e assinatura) são considerados obrigatórios, mesmo que o e-mail não mencione anexos.
+- Qualquer outro anexo (extrato, contrato, termo, etc.) só será exigido se o corpo do e-mail ou a minuta mencionarem explicitamente o envio adicional de documentos.
+- O nome da minuta de resposta deve coincidir com os identificadores extraídos (ex: processo, FNDA, OPAJ).
+- Os identificadores devem estar no título ou conteúdo dos anexos e no texto da resposta.
+- Se o corpo ou a minuta mencionam “segue anexo”, “documento em anexo” ou termos similares, o respectivo documento deve estar presente.
+- Se o status é “resposta final”, deve conter o cumprimento integral da ordem judicial. Explique qual foi o cumprimento.
+- Se o status é “dilação”, a minuta deve conter pedido de dilação de prazo.
 - Não repita informações. Seja conciso e objetivo.
+
+### Perguntas para análise (responda na justificativa, mas NÃO repita as perguntas!):
+1. A minuta está presente, com conteúdo coerente e identificadores corretos?
+2. Há comprovante de assinatura da minuta?
+3. Se mencionados, os documentos adicionais estão presentes?
+4. Há inconsistência entre o que é mencionado no corpo/minuta e o que foi anexado?
+5. Está apto a ser protocolado, deve ser revisado, ou rejeitado?
 
 ### Perguntas para análise (responda na justificativa, mas NÃO repita as perguntas!):
 1. Explique sucintamente o que o banco está informando ou cumprindo na resposta.
@@ -75,17 +87,19 @@ def validar_formal_ia(assunto, corpo, nomes_anexos, textos_anexos, campos_extrai
             return json.loads(content)
         except json.JSONDecodeError:
             return {
-                "valido": False,
+                "valido": None,
+                "erro_ia": "json_decode_error",
                 "campos_faltantes": [],
-                "coerencia": False,
-                "motivo": f"Resposta da IA inválida: não foi possível interpretar como JSON. Conteúdo: {content}",
-                "acao_sugerida": "revisar"
+                "coerencia": None,
+                "motivo": f"IA não respondeu em JSON válido. Conteúdo bruto: {content}",
+                "acao_sugerida": "aguardar"
             }
     except Exception as e:
         return {
-            "valido": False,
+            "valido": None,
+            "erro_ia": str(e),
             "campos_faltantes": [],
-            "coerencia": False,
-            "motivo": f"Erro ao chamar a API da IA: {str(e)}",
-            "acao_sugerida": "revisar"
+            "coerencia": None,
+            "motivo": f"IA não executada — erro de API: {str(e)}",
+            "acao_sugerida": "aguardar"
         }

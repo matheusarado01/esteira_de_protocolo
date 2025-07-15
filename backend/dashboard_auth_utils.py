@@ -82,6 +82,24 @@ def usuario_existe(username):
         logger.error(f"Erro ao verificar existência de usuário {username}: {str(e)}")
         raise
 
+# NOVA FUNÇÃO para consulta do usuário pelo nome (sem validar senha de novo)
+def buscar_usuario(username):
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT nome, perfil, ativo FROM usuarios WHERE username = %s", (username,))
+                row = cur.fetchone()
+                if row and row[2]:  # ativo = True
+                    return {
+                        "username": username,
+                        "nome": row[0],
+                        "perfil": row[1]
+                    }
+                return None
+    except psycopg2.Error as e:
+        logger.error(f"Erro ao buscar usuário {username}: {str(e)}")
+        raise
+
 if __name__ == "__main__":
     import getpass
     print("Criação de novo usuário admin")

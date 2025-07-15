@@ -1,42 +1,28 @@
-from fastapi import APIRouter, HTTPException, UploadFile, File
-from fastapi.responses import StreamingResponse, FileResponse
+# backend/routers/protocolos.py
+
+from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Query
+from fastapi.responses import StreamingResponse, JSONResponse
 import psycopg2
 import psycopg2.extras
-import re
+import os
+from datetime import datetime, date
+from typing import Optional
 import io
 import pandas as pd
-import os
-from dotenv import load_dotenv
-from datetime import datetime
-from typing import Dict
+import re
 import logging
+from dotenv import load_dotenv
+from backend.dashboard_auth_utils import autenticar_usuario
+from backend.utils import get_conn
+
+load_dotenv()
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-from backend.dashboard_auth_utils import autenticar_usuario
-
-load_dotenv()
-
 router = APIRouter()
 
-DB_CONFIG = {
-    "host": os.getenv("DB_HOST"),
-    "port": os.getenv("DB_PORT"),
-    "dbname": os.getenv("DB_NAME"),
-    "user": os.getenv("DB_USER"),
-    "password": os.getenv("DB_PASS"),
-}
-
-def get_conn():
-    try:
-        conn = psycopg2.connect(**DB_CONFIG)
-        logger.info("Conexão com o banco estabelecida")
-        return conn
-    except psycopg2.Error as e:
-        logger.error(f"Erro ao conectar ao banco: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Erro ao conectar ao banco: {str(e)}")
-
+# --- FUNÇÕES AUXILIARES PADRÃO ---
 def extrair_processo(texto: str) -> str:
     match = re.search(r"\d{7}-\d{2}\.\d{4}\.\d{1,2}\.\d{1,2}\.\d{4}", texto)
     return match.group(0) if match else ""
@@ -45,308 +31,372 @@ def extrair_opaj(texto: str) -> str:
     match = re.search(r"\b\d{7}\b", texto)
     return match.group(0) if match else ""
 
-def tem_zip(caminho: str) -> bool:
-    return caminho.endswith(".zip") if caminho else False
+def tem_zip(nome: str) -> bool:
+    return nome.endswith(".zip") if nome else False
 
-def tem_pdf(caminho: str) -> bool:
-    return caminho.endswith(".pdf") if caminho else False
+def tem_pdf(nome: str) -> bool:
+    return nome.endswith(".pdf") if nome else False
+
+# --- LISTAGEM PRINCIPAL DE PROTOCOLOS (NOVA BASE: TABELA PROTOCOLOS) ---
 
 @router.get("/protocolos")
-async def listar_protocolos():
+def listar_protocolos(
+    data: str = Query(None),
+    status: str = Query(None),
+    tipo_email: str = Query("protocolo"),
+    limite: int = Query(200)
+):
+    """
+    Listagem principal, puxando protocolos, status, dados do e-mail, anexos etc.
+    """
     conn = get_conn()
-    cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
-
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     query = """
         SELECT 
-            e.id_email, e.assunto, e.remetente, e.recebido_em, e.corpo_email,
-            r.tipo_resposta, r.processo, r.opaj, r.status_final, r.ramo_justica,
-            r.tribunal_nome, r.estado, r.prazo_fatal, r.nomes_anexos,
-            v.motivo, -- AJUSTADO AQUI
+            p.id_protocolo, p.id_email, p.id_resposta, p.status, p.acao_usuario,
+            p.hash_documento, p.hash_email, p.observacao, p.motivo_invalido,
+            p.criado_em, p.ultima_atualizacao,
+            e.assunto, e.remetente, e.recebido_em, e.corpo_email, e.tipo_email,
+            r.tipo_resposta, r.processo, r.opaj, r.status_final,
+            r.acao_sugerida, r.status_validacao, r.motivo_invalido,
             a.id_anexo, a.nome_arquivo, a.tipo_arquivo
-        FROM emails e
-        LEFT JOIN respostas r ON r.id_email = e.id_email
-        LEFT JOIN validacoes v ON v.id_resposta = r.id_resposta
-        LEFT JOIN anexos_email a ON a.id_email = e.id_email
-        ORDER BY e.recebido_em DESC
-        LIMIT 200
+        FROM protocolos p
+        JOIN emails e ON e.id_email = p.id_email
+        LEFT JOIN respostas r ON r.id_resposta = p.id_resposta
+        LEFT JOIN anexos_email a ON a.id_email = p.id_email
+        WHERE TRUE
     """
-    try:
-        cur.execute(query)
-        rows = cur.fetchall()
+    params = []
+    if tipo_email:
+        query += " AND e.tipo_email = %s"
+        params.append(tipo_email)
+    if status:
+        query += " AND p.status = %s"
+        params.append(status)
+    if data:
+        query += " AND DATE(e.recebido_em) = %s"
+        params.append(data)
+    query += " ORDER BY p.criado_em DESC"
+    query += f" LIMIT {limite}"
 
+    try:
+        cur.execute(query, tuple(params))
         resultados = []
-        for row in rows:
-            processo = row["processo"] or extrair_processo(row["corpo_email"] or row["assunto"])
-            tribunal = row["tribunal_nome"] or ("TJSP" if ".8.26." in processo else "TRT" if ".5." in processo else "")
-            resultado = {
-                "id_email": row["id_email"],
-                "assunto": row["assunto"],
-                "remetente": row["remetente"],
-                "recebido_em": row["recebido_em"].isoformat() if row["recebido_em"] else "",
-                "processo": processo,
-                "opaj": row["opaj"] or extrair_opaj(row["corpo_email"] or ""),
-                "tribunal": tribunal,
-                "ramo_justica": row["ramo_justica"] or "",
-                "estado": row["estado"] or "",
-                "prazo_fatal": row["prazo_fatal"].isoformat() if row["prazo_fatal"] else "",
-                "tipo_resposta": row["tipo_resposta"] or "",
-                "status_final": row["status_final"] or "",
-                "motivo": row["motivo"] or "",    # <-- Só motivo agora!
-                "tem_zip": tem_zip(row["nome_arquivo"] or ""),
-                "tem_pdf": tem_pdf(row["nome_arquivo"] or ""),
-                "id_anexo": row["id_anexo"],
-                "nome_anexo": row["nome_arquivo"],
-            }
-            resultados.append(resultado)
+        for row in cur.fetchall():
+            row["tem_zip"] = tem_zip(row["nome_arquivo"] or "")
+            row["tem_pdf"] = tem_pdf(row["nome_arquivo"] or "")
+            resultados.append(row)
         logger.info("Lista de protocolos retornada com sucesso")
-    except psycopg2.Error as e:
+        return {"protocolos": resultados}
+    except Exception as e:
         logger.error(f"Erro ao consultar protocolos: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Erro ao consultar protocolos: {str(e)}")
     finally:
         cur.close()
         conn.close()
 
-    return {"protocolos": resultados}
 
-@router.get("/protocolos/{id_email}")
-async def get_protocolo(id_email: int):
+# --- LISTAR SÓ PROTOCOLOS DE COMUNICAÇÕES / CANCELAMENTOS ---
+@router.get("/comunicacoes")
+def listar_comunicacoes(data: str = Query(None), tipo: str = Query(None)):
+    """
+    Lista comunicações e cancelamentos (tipo_email <> protocolo)
+    """
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    query = """
+        SELECT e.id_email, e.assunto, e.remetente, e.recebido_em, e.tipo_email, e.corpo_email
+        FROM emails e
+        WHERE e.tipo_email <> 'protocolo'
+    """
+    params = []
+    if tipo:
+        query += " AND e.tipo_email = %s"
+        params.append(tipo)
+    if data:
+        query += " AND DATE(e.recebido_em) = %s"
+        params.append(data)
+    query += " ORDER BY e.recebido_em DESC LIMIT 200"
+    cur.execute(query, tuple(params))
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+    return {"comunicacoes": rows}
+
+# --- DETALHE DO PROTOCOLO ---
+@router.get("/protocolos/{id_protocolo}")
+def detalhe_protocolo(id_protocolo: int):
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur.execute("""
+        SELECT p.*, e.assunto, e.remetente, e.corpo_email, e.recebido_em, r.*, a.*
+        FROM protocolos p
+        JOIN emails e ON e.id_email = p.id_email
+        LEFT JOIN respostas r ON r.id_resposta = p.id_resposta
+        LEFT JOIN anexos_email a ON a.id_email = p.id_email
+        WHERE p.id_protocolo = %s
+        LIMIT 1
+    """, (id_protocolo,))
+    row = cur.fetchone()
+    cur.close()
+    conn.close()
+    if not row:
+        raise HTTPException(status_code=404, detail="Protocolo não encontrado")
+    return row
+
+# --- PROTOCOLAR OFÍCIO (UPLOAD DE RECIBO) ---
+@router.post("/protocolos/{id_protocolo}/upload_recibo")
+async def upload_recibo(
+    id_protocolo: int,
+    usuario: str = Form(...),
+    file: UploadFile = File(...),
+    observacao: str = Form("")
+):
+    conn = get_conn()
+    cur = conn.cursor()
+    contents = await file.read()
+    cur.execute("""
+        UPDATE protocolos
+        SET acao_usuario='protocolado', usuario_protocolo=%s, protocolado_em=NOW(),
+            recibo_protocolo=%s, observacao=%s
+        WHERE id_protocolo=%s
+    """, (
+        usuario, file.filename, observacao, id_protocolo
+    ))
+    conn.commit()
+    cur.close()
+    conn.close()
+    return {"message": "Recibo protocolado com sucesso."}
+
+# --- REPORTAR DIVERGÊNCIA ---
+@router.post("/protocolos/{id_protocolo}/divergencia")
+async def registrar_divergencia(
+    id_protocolo: int,
+    usuario: str = Form(...),
+    motivo_manual: str = Form(...),
+    observacao: str = Form("")
+):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        INSERT INTO divergencias (id_protocolo, usuario, motivo_manual, observacao, data_registro)
+        VALUES (%s, %s, %s, %s, NOW())
+    """, (id_protocolo, usuario, motivo_manual, observacao))
+    conn.commit()
+    cur.close()
+    conn.close()
+    return {"message": "Divergência registrada com sucesso"}
+
+# --- DOWNLOAD DE ANEXO ---
+@router.get("/anexos/{id_anexo}/download")
+def download_anexo_publico(id_anexo: int):
     conn = get_conn()
     cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+    cur.execute("""
+        SELECT nome_arquivo, tipo_arquivo, conteudo
+        FROM anexos_email
+        WHERE id_anexo = %s
+    """, (id_anexo,))
+    resultado = cur.fetchone()
+    cur.close()
+    conn.close()
+    if not resultado:
+        raise HTTPException(status_code=404, detail="Anexo não encontrado")
+    nome_arquivo = resultado["nome_arquivo"]
+    tipo_arquivo = resultado["tipo_arquivo"] or "application/octet-stream"
+    conteudo = resultado["conteudo"]
+    if not conteudo:
+        raise HTTPException(status_code=404, detail="Conteúdo do anexo está vazio")
+    return StreamingResponse(io.BytesIO(conteudo), media_type=tipo_arquivo, headers={
+        "Content-Disposition": f'attachment; filename="{nome_arquivo}"'
+    })
 
+# --- RELATÓRIO EM EXCEL ---
+@router.get("/protocolos/relatorio")
+def gerar_relatorio_protocolos(
+    data_inicio: str = Query(None),
+    data_fim: str = Query(None),
+    status: str = Query(None),
+    tipo_email: str = Query("protocolo"),
+):
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    query = """
+        SELECT
+            p.*, e.assunto, e.remetente, e.recebido_em, e.tipo_email, r.tipo_resposta, r.processo, r.opaj
+        FROM protocolos p
+        JOIN emails e ON e.id_email = p.id_email
+        LEFT JOIN respostas r ON r.id_resposta = p.id_resposta
+        WHERE TRUE
+    """
+    params = []
+    if tipo_email:
+        query += " AND e.tipo_email = %s"
+        params.append(tipo_email)
+    if status:
+        query += " AND p.status = %s"
+        params.append(status)
+    if data_inicio:
+        query += " AND e.recebido_em::date >= %s"
+        params.append(data_inicio)
+    if data_fim:
+        query += " AND e.recebido_em::date <= %s"
+        params.append(data_fim)
+    query += " ORDER BY p.criado_em DESC"
+    cur.execute(query, tuple(params))
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+    if not rows:
+        raise HTTPException(status_code=400, detail="Nenhum protocolo encontrado.")
+    df = pd.DataFrame(rows)
+    stream = io.BytesIO()
+    with pd.ExcelWriter(stream, engine="xlsxwriter") as writer:
+        df.to_excel(writer, sheet_name="Protocolos", index=False)
+        writer.sheets["Protocolos"].autofilter(0, 0, len(df), len(df.columns) - 1)
+    stream.seek(0)
+    return StreamingResponse(stream, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            headers={"Content-Disposition": "attachment; filename=protocolos.xlsx"})
+
+# --- CONTROLE DE PAUSA DO PIPELINE (SEM ALTERAÇÃO) ---
+@router.post("/pipeline/pausar")
+def pausar_pipeline():
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        INSERT INTO controle_pipeline (chave, valor)
+        VALUES ('pausar_pipeline', 'true')
+        ON CONFLICT (chave) DO UPDATE SET valor = 'true'
+    """)
+    conn.commit()
+    cur.close()
+    conn.close()
+    return {"mensagem": "⛔ Pipeline pausado com sucesso."}
+
+@router.post("/pipeline/retomar")
+def retomar_pipeline():
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("UPDATE controle_pipeline SET valor = 'false' WHERE chave = 'pausar_pipeline'")
+    conn.commit()
+    cur.close()
+    conn.close()
+    return {"mensagem": "✅ Pipeline retomado com sucesso."}
+
+@router.get("/pipeline/status")
+def status_pipeline():
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT valor FROM controle_pipeline WHERE chave = 'pausar_pipeline'")
+    valor = cur.fetchone()
+    cur.close()
+    conn.close()
+    return {"pausado": (valor and valor[0] == "true")}
+
+# --- CAPTURA E VALIDAÇÃO IA (SEM ALTERAÇÃO) ---
+@router.post("/captura-emails")
+def executar_captura():
+    from backend.captura_emails import capturar_emails
+    capturar_emails()
+    return {"status": "ok", "mensagem": "Captura de e-mails executada com sucesso."}
+
+@router.post("/validar-ia")
+def executar_validacao_ia(limite: Optional[int] = Query(None)):
+    from backend.pipeline import pipeline
+    pipeline(limite=limite)
+    return {"status": "ok", "mensagem": f"Validação IA executada com sucesso (limite={limite or 'sem limite'})"}
+
+# --- CONTAGEM CASOS E ESTEIRA (EXEMPLO) ---
+@router.get("/painel-controle/contagem-casos")
+def contagem_casos_em_processamento(
+    tipo_email: str = Query("protocolo"),
+    status: str = Query(None)
+):
+    conn = get_conn()
+    cur = conn.cursor()
+    query = """
+        SELECT COUNT(DISTINCT p.id_protocolo)
+        FROM protocolos p
+        JOIN emails e ON e.id_email = p.id_email
+        WHERE TRUE
+    """
+    params = []
+    if tipo_email:
+        query += " AND e.tipo_email = %s"
+        params.append(tipo_email)
+    if status:
+        query += " AND p.status = %s"
+        params.append(status)
+    else:
+        query += " AND p.status NOT IN ('protocolado', 'cancelado')"
+    cur.execute(query, tuple(params))
+    total = cur.fetchone()[0]
+    cur.close()
+    conn.close()
+    return {"total": total}
+
+
+@router.get("/esteira")
+def esteira_protocolos(
+    data: str = Query(None),
+    status: str = Query(None),
+    tipo_email: str = Query("protocolo"),
+    limite: int = Query(100)
+):
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     query = """
         SELECT 
-            e.id_email, e.assunto, e.remetente, e.recebido_em, e.corpo_email,
-            r.tipo_resposta, r.processo, r.opaj, r.status_final, r.ramo_justica,
-            r.tribunal_nome, r.estado, r.prazo_fatal, r.nomes_anexos,
-            v.motivo, -- AJUSTADO AQUI
-            a.id_anexo, a.nome_arquivo, a.tipo_arquivo
+            e.id_email, e.assunto, e.recebido_em, e.tipo_email, e.corpo_email,
+            p.id_protocolo, p.id_resposta, p.status, p.acao_usuario, p.observacao, p.criado_em, p.ultima_atualizacao,
+            r.tipo_resposta, r.processo, r.opaj, r.status_final
         FROM emails e
-        LEFT JOIN respostas r ON r.id_email = e.id_email
-        LEFT JOIN validacoes v ON v.id_resposta = r.id_resposta
-        LEFT JOIN anexos_email a ON a.id_email = e.id_email
-        WHERE e.id_email = %s
+        LEFT JOIN protocolos p ON p.id_email = e.id_email
+        LEFT JOIN respostas r ON r.id_resposta = p.id_resposta
+        WHERE TRUE
     """
-    try:
-        cur.execute(query, (id_email,))
-        row = cur.fetchone()
+    params = []
+    if tipo_email:
+        query += " AND e.tipo_email = %s"
+        params.append(tipo_email)
+    if status:
+        query += " AND p.status = %s"
+        params.append(status)
+    if data:
+        query += " AND DATE(e.recebido_em) = %s"
+        params.append(data)
+    query += " ORDER BY COALESCE(p.criado_em, e.recebido_em) DESC"
+    query += f" LIMIT {limite}"
+    cur.execute(query, tuple(params))
+    rows = cur.fetchall()
 
-        if not row:
-            logger.warning(f"Protocolo com id_email {id_email} não encontrado")
-            raise HTTPException(status_code=404, detail="Protocolo não encontrado")
+    # Buscar os anexos de cada email:
+    for row in rows:
+        cur.execute("""
+            SELECT id_anexo, nome_arquivo, tipo_arquivo
+            FROM anexos_email WHERE id_email = %s
+        """, (row['id_email'],))
+        row['anexos'] = cur.fetchall()
 
-        processo = row["processo"] or extrair_processo(row["corpo_email"] or row["assunto"])
-        tribunal = row["tribunal_nome"] or ("TJSP" if ".8.26." in processo else "TRT" if ".5." in processo else "")
-        resultado = {
-            "id_email": row["id_email"],
-            "assunto": row["assunto"],
-            "remetente": row["remetente"],
-            "recebido_em": row["recebido_em"].isoformat() if row["recebido_em"] else "",
-            "processo": processo,
-            "opaj": row["opaj"] or extrair_opaj(row["corpo_email"] or ""),
-            "tribunal": tribunal,
-            "ramo_justica": row["ramo_justica"] or "",
-            "estado": row["estado"] or "",
-            "prazo_fatal": row["prazo_fatal"].isoformat() if row["prazo_fatal"] else "",
-            "tipo_resposta": row["tipo_resposta"] or "",
-            "status_final": row["status_final"] or "",
-            "motivo": row["motivo"] or "",
-            "tem_zip": tem_zip(row["nome_arquivo"] or ""),
-            "tem_pdf": tem_pdf(row["nome_arquivo"] or ""),
-            "id_anexo": row["id_anexo"],
-            "nome_anexo": row["nome_arquivo"],
-        }
-        logger.info(f"Protocolo com id_email {id_email} retornado com sucesso")
-        return resultado
-    except psycopg2.Error as e:
-        logger.error(f"Erro ao consultar protocolo {id_email}: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Erro ao consultar protocolo: {str(e)}")
-    finally:
-        cur.close()
-        conn.close()
+    cur.close()
+    conn.close()
+    return {"esteira": rows}
 
-@router.get("/anexos/{id_anexo}")
-async def download_anexo(id_anexo: int):
-    conn = get_conn()
-    cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
-    try:
-        cur.execute("SELECT nome_arquivo, conteudo FROM anexos_email WHERE id_anexo = %s", (id_anexo,))
-        anexo = cur.fetchone()
 
-        if not anexo or not anexo["conteudo"]:
-            logger.warning(f"Anexo com id_anexo {id_anexo} não encontrado")
-            raise HTTPException(status_code=404, detail="Anexo não encontrado")
+@router.get("/captura-emails/progresso")
+def progresso_captura():
+    progress_file = "progress_captura.json"
+    if os.path.exists(progress_file):
+        with open(progress_file, "r", encoding="utf-8") as f:
+            try:
+                data = json.load(f)
+                return data
+            except Exception:
+                return {"total": 0, "atual": 0, "finalizado": False, "erro": "Arquivo corrompido"}
+    return {"total": 0, "atual": 0, "finalizado": False, "erro": "Sem progresso disponível"}
 
-        logger.info(f"Anexo com id_anexo {id_anexo} enviado com sucesso")
-        return StreamingResponse(
-            io.BytesIO(anexo["conteudo"]),
-            media_type="application/octet-stream",
-            headers={"Content-Disposition": f"attachment; filename={anexo['nome_arquivo']}"},
-        )
-    except psycopg2.Error as e:
-        logger.error(f"Erro ao baixar anexo {id_anexo}: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Erro ao baixar anexo: {str(e)}")
-    finally:
-        cur.close()
-        conn.close()
-
-@router.post("/protocolos/{id_email}/upload")
-async def upload_recibo(id_email: int, file: UploadFile = File(...)):
-    conn = get_conn()
-    cur = conn.cursor()
-    try:
-        cur.execute("SELECT id_email FROM emails WHERE id_email = %s", (id_email,))
-        if not cur.fetchone():
-            logger.warning(f"Protocolo com id_email {id_email} não encontrado")
-            raise HTTPException(status_code=404, detail="Protocolo não encontrado")
-
-        conteudo = await file.read()
-
-        cur.execute(
-            """
-            INSERT INTO protocolos (
-                id_email, data_protocolo, hora_protocolo, usuario, acao_usuario, nome_arquivo, arquivo, data_registro
-            )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
-            RETURNING id_protocolo
-            """,
-            (
-                id_email,
-                datetime.now().date(),
-                datetime.now().time(),
-                "system",
-                "UPLOAD_RECIBO",
-                file.filename,
-                conteudo,
-            ),
-        )
-        conn.commit()
-        logger.info(f"Recibo enviado com sucesso para id_email {id_email}")
-        return {"message": "Recibo enviado com sucesso", "filename": file.filename}
-    except psycopg2.Error as e:
-        logger.error(f"Erro ao enviar recibo para id_email {id_email}: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Erro ao enviar recibo: {str(e)}")
-    finally:
-        cur.close()
-        conn.close()
-
-@router.post("/protocolos/{id_email}/divergencia")
-async def registrar_divergencia(id_email: int, divergencia: Dict):
-    conn = get_conn()
-    cur = conn.cursor()
-    try:
-        cur.execute("SELECT id_email FROM emails WHERE id_email = %s", (id_email,))
-        if not cur.fetchone():
-            logger.warning(f"Protocolo com id_email {id_email} não encontrado")
-            raise HTTPException(status_code=404, detail="Protocolo não encontrado")
-
-        cur.execute("SELECT id_resposta FROM respostas WHERE id_email = %s", (id_email,))
-        resposta = cur.fetchone()
-        if not resposta:
-            logger.warning(f"Resposta para id_email {id_email} não encontrada")
-            raise HTTPException(status_code=404, detail="Resposta não encontrada")
-
-        motivo = divergencia.get("motivo")
-        cur.execute(
-            """
-            INSERT INTO validacoes (id_resposta, agente, resultado, motivo, data_validacao)
-            VALUES (%s, %s, %s, %s, NOW())
-            """,
-            (resposta[0], "system", False, motivo),
-        )
-        cur.execute(
-            """
-            UPDATE respostas SET status_final = %s WHERE id_email = %s
-            """,
-            ("EM CORREÇÃO", id_email),
-        )
-        conn.commit()
-        logger.info(f"Divergência registrada com sucesso para id_email {id_email}")
-        return {"message": "Divergência registrada com sucesso"}
-    except psycopg2.Error as e:
-        logger.error(f"Erro ao registrar divergência para id_email {id_email}: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Erro ao registrar divergência: {str(e)}")
-    finally:
-        cur.close()
-        conn.close()
-
-@router.get("/relatorios")
-async def gerar_relatorio(data_inicio: str = None, data_fim: str = None, tribunal: str = None, status: str = None):
-    conn = get_conn()
-    cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
-    try:
-        query = """
-            SELECT 
-                e.id_email, e.assunto, e.remetente, e.recebido_em,
-                r.processo, r.tribunal_nome, r.ramo_justica, r.estado, 
-                r.status_final, r.prazo_fatal, r.tipo_resposta,
-                v.motivo -- AJUSTADO AQUI
-            FROM emails e
-            LEFT JOIN respostas r ON r.id_email = e.id_email
-            LEFT JOIN validacoes v ON v.id_resposta = r.id_resposta
-            WHERE (%s IS NULL OR e.recebido_em >= %s)
-            AND (%s IS NULL OR e.recebido_em <= %s)
-            AND (%s IS NULL OR r.tribunal_nome = %s)
-            AND (%s IS NULL OR r.status_final = %s)
-            ORDER BY e.recebido_em DESC
-        """
-        cur.execute(query, (data_inicio, data_inicio, data_fim, data_fim, tribunal, tribunal, status, status))
-        rows = cur.fetchall()
-
-        dados = [
-            {
-                "id_email": row["id_email"],
-                "assunto": row["assunto"],
-                "remetente": row["remetente"],
-                "recebido_em": row["recebido_em"].isoformat() if row["recebido_em"] else "",
-                "processo": row["processo"],
-                "tribunal": row["tribunal_nome"],
-                "ramo_justica": row["ramo_justica"],
-                "estado": row["estado"],
-                "status_final": row["status_final"],
-                "prazo_fatal": row["prazo_fatal"].isoformat() if row["prazo_fatal"] else "",
-                "tipo_resposta": row["tipo_resposta"],
-                "motivo": row["motivo"],
-            }
-            for row in rows
-        ]
-
-        df = pd.DataFrame(dados)
-        output = io.BytesIO()
-        df.to_excel(output, index=False)
-        output.seek(0)
-        logger.info("Relatório gerado com sucesso")
-        return StreamingResponse(
-            output,
-            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            headers={"Content-Disposition": "attachment; filename=relatorio_protocolos.xlsx"},
-        )
-    except psycopg2.Error as e:
-        logger.error(f"Erro ao gerar relatório: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Erro ao gerar relatório: {str(e)}")
-    finally:
-        cur.close()
-        conn.close()
-
-@router.post("/login")
-async def login(credentials: Dict):
-    conn = get_conn()
-    cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
-    try:
-        username = credentials.get("username")
-        password = credentials.get("password")
-        logger.info(f"Tentativa de login para usuário {username}")
-        usuario = autenticar_usuario(username, password)
-        if not usuario:
-            logger.warning(f"Falha no login para usuário {username}")
-            raise HTTPException(status_code=401, detail="Usuário ou senha incorretos")
-        logger.info(f"Login bem-sucedido para usuário {username}")
-        return {
-            "token": "fake-jwt-token",
-            "username": usuario["username"]
-        }
-    except psycopg2.Error as e:
-        logger.error(f"Erro ao autenticar usuário {credentials.get('username')}: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Erro ao autenticar: {str(e)}")
-    finally:
-        cur.close()
-        conn.close()
+@router.post("/captura-emails/stop")
+def stop_captura():
+    with open("progress_captura.json", "w") as f:
+        json.dump({"status": "cancelado"}, f)
+    return {"status": "cancelado"}

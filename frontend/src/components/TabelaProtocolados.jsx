@@ -1,6 +1,7 @@
 // src/components/TabelaProtocolados.jsx
 
 import React, { useEffect, useState } from "react";
+import { API_BASE } from "../config"; // NOVO: importa a base da API
 
 function TabelaProtocolados() {
   const [oficios, setOficios] = useState([]);
@@ -8,7 +9,7 @@ function TabelaProtocolados() {
   const [erro, setErro] = useState("");
 
   useEffect(() => {
-    fetch("/api/oficios/protocolados")
+    fetch(`${API_BASE}/api/oficios/protocolados`)
       .then(res => res.json())
       .then(data => {
         setOficios(data.oficios_protocolados || []);
@@ -18,6 +19,7 @@ function TabelaProtocolados() {
         setErro("Erro ao buscar ofícios protocolados.");
         setLoading(false);
       });
+    // eslint-disable-next-line
   }, []);
 
   if (loading) return <div className="p-4">Carregando...</div>;
@@ -58,7 +60,7 @@ function TabelaProtocolados() {
                   {(oficio.anexos || []).map(ax => (
                     <a
                       key={ax.id_anexo}
-                      href={`/api/oficios/anexo/${ax.id_anexo}/download`}
+                      href={`${API_BASE}/api/oficios/anexo/${ax.id_anexo}/download`}
                       className="text-blue-600 underline mr-2"
                       target="_blank"
                       rel="noopener noreferrer"

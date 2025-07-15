@@ -1,0 +1,8 @@
+# Ignorar o arquivo .env
+.env
+# Ignorar arquivos de log
+*.log
+# Ignorar dependências do Node.js
+node_modules/
+# Ignorar arquivos do sistema (ex: MacOS)
+*.DS_Store

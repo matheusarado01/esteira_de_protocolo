@@ -1,5 +1,6 @@
 import React, { useState } from "react";
-import { useNavigate } from "react-router-dom"; // Substituído useHistory por useNavigate
+import { useNavigate } from "react-router-dom";
+import { API_BASE } from "../config";
 
 function Relatorios() {
     const [dataInicio, setDataInicio] = useState("");
@@ -7,13 +8,13 @@ function Relatorios() {
     const [tribunal, setTribunal] = useState("");
     const [status, setStatus] = useState("");
     const [error, setError] = useState("");
-    const navigate = useNavigate(); // Substituído useHistory por useNavigate
+    const navigate = useNavigate();
 
     const handleExport = async (e) => {
         e.preventDefault();
         const token = localStorage.getItem("token");
         if (!token) {
-            navigate("/login"); // Substituído history.push por navigate
+            navigate("/login");
             return;
         }
 
@@ -24,9 +25,11 @@ function Relatorios() {
                 ...(tribunal && { tribunal }),
                 ...(status && { status }),
             });
-            const res = await fetch(`http://localhost:8000/api/relatorios?${params}`, {
+
+            const res = await fetch(`${API_BASE}/api/protocolos/relatorios?${params}`, {
                 headers: { "Authorization": `Bearer ${token}` },
             });
+
             if (res.ok) {
                 const blob = await res.blob();
                 const url = window.URL.createObjectURL(blob);
@@ -51,61 +54,51 @@ function Relatorios() {
                 <form onSubmit={handleExport}>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
                         <div>
-                            <label className="block text-gray-700 mb-2" htmlFor="dataInicio">
-                                Data Início
-                            </label>
+                            <label className="block text-gray-700">Data Início</label>
                             <input
                                 type="date"
-                                id="dataInicio"
                                 value={dataInicio}
                                 onChange={(e) => setDataInicio(e.target.value)}
-                                className="w-full border border-gray-300 p-2 rounded focus:outline-none focus:ring focus:border-blue-300"
+                                className="mt-1 block w-full border-gray-300 rounded-md shadow-sm"
                             />
                         </div>
                         <div>
-                            <label className="block text-gray-700 mb-2" htmlFor="dataFim">
-                                Data Fim
-                            </label>
+                            <label className="block text-gray-700">Data Fim</label>
                             <input
                                 type="date"
-                                id="dataFim"
                                 value={dataFim}
                                 onChange={(e) => setDataFim(e.target.value)}
-                                className="w-full border border-gray-300 p-2 rounded focus:outline-none focus:ring focus:border-blue-300"
+                                className="mt-1 block w-full border-gray-300 rounded-md shadow-sm"
                             />
                         </div>
                         <div>
-                            <label className="block text-gray-700 mb-2" htmlFor="tribunal">
-                                Tribunal
-                            </label>
-                            <select
-                                id="tribunal"
+                            <label className="block text-gray-700">Tribunal</label>
+                            <input
+                                type="text"
                                 value={tribunal}
                                 onChange={(e) => setTribunal(e.target.value)}
-                                className="w-full border border-gray-300 p-2 rounded focus:outline-none focus:ring focus:border-blue-300"
-                            >
-                                <option value="">Todos</option>
-                                <option value="TJSP">TJSP</option>
-                                <option value="TRT">TRT</option>
-                            </select>
+                                placeholder="Ex: TJSP, TRF3"
+                                className="mt-1 block w-full border-gray-300 rounded-md shadow-sm"
+                            />
                         </div>
                         <div>
-                            <label className="block text-gray-700 mb-2" htmlFor="status">
-                                Status
-                            </label>
+                            <label className="block text-gray-700">Status</label>
                             <select
-                                id="status"
                                 value={status}
                                 onChange={(e) => setStatus(e.target.value)}
-                                className="w-full border border-gray-300 p-2 rounded focus:outline-none focus:ring focus:border-blue-300"
+                                className="mt-1 block w-full border-gray-300 rounded-md shadow-sm"
                             >
                                 <option value="">Todos</option>
-                                <option value="EM CORREÇÃO">Em Correção</option>
-                                <option value="FINALIZADO">Finalizado</option>
+                                <option value="pendente">Pendente</option>
+                                <option value="protocolado">Protocolado</option>
+                                <option value="reprovado">Reprovado</option>
+                                <option value="reportado">Reportado</option>
                             </select>
                         </div>
                     </div>
+
                     {error && <p className="text-red-500 mb-4">{error}</p>}
+
                     <button
                         type="submit"
                         className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"

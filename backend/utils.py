@@ -5,6 +5,17 @@ from datetime import datetime
 from dotenv import load_dotenv
 from pathlib import Path
 import logging
+import hashlib
+
+def calcular_hash_documento(conteudo):
+    """
+    Calcula hash SHA256 do conteúdo (bytes ou string).
+    """
+    if conteudo is None:
+        return None
+    if isinstance(conteudo, str):
+        conteudo = conteudo.encode('utf-8')
+    return hashlib.sha256(conteudo).hexdigest()
 
 # Corrige o carregamento do .env para garantir que funcione fora da raiz
 env_path = Path(__file__).resolve().parent.parent / ".env"
@@ -30,6 +41,9 @@ def get_conn():
 
 def log(msg, tipo="INFO"):
     timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    tipo = tipo.upper()
+    if not hasattr(logging, tipo):
+        tipo = "ERROR"
     logger.log(getattr(logging, tipo), f"[{timestamp}] {msg}")
 
 CNJ_RE = re.compile(r"\d{7}-\d{2}(?:\.\d{4})?\.\d(?:\.\d{2})?\.\d{4}|\d{20}")
@@ -89,7 +103,7 @@ def log_query(cur, query, params=None):
         cur.execute(query, params)
         log(f"Query executada: {query} | Params: {params}")
     except psycopg2.Error as e:
-        log(f"Erro ao executar query: {query} | Params: {params} | Erro: {e}", "ERRO")
+        log(f"Erro ao executar query: {query} | Params: {params} | Erro: {e}", "ERROR")
         raise
 
 def testar_conexao():
@@ -110,5 +124,49 @@ def buscar_validacoes_por_resposta(cur, id_resposta):
         """, (id_resposta,))
         return cur.fetchall()
     except psycopg2.Error as e:
-        log(f"Erro ao buscar validações: {e}", "ERRO")
+        log(f"Erro ao buscar validações: {e}", "ERROR")
         return []
+
+def classificar_tipo_email(assunto, corpo):
+    """
+    Classifica o tipo de e-mail com base no assunto e corpo.
+    Pode ser ajustado conforme necessidade!
+    """
+    assunto = (assunto or "").lower()
+    corpo = (corpo or "").lower()
+    if "ofício" in assunto or "resposta" in assunto:
+        return "protocolo"
+    if "cancelamento" in assunto or "desistência" in assunto:
+        return "cancelamento"
+    if "comunicação" in assunto or "comunicado" in assunto:
+        return "comunicacao"
+    # Pode criar mais regras...
+    return "outro"
+
+# ... (restante do seu utils.py acima)
+
+def validar_contexto_email(anexos, assunto, corpo):
+    """
+    Valida o conjunto de anexos + contexto do e-mail, retornando:
+    - status_geral: "completo", "incompleto" ou "erro"
+    - lista de documentos/campos faltantes
+    """
+    faltantes = []
+    nomes = [a.get('nome_arquivo', '').lower() for a in anexos]
+    tipos = [a.get('tipo', '') for a in anexos]
+    tem_minuta = any('minuta' in n or 'resposta' in n or 'oficio' in n for n in nomes)
+    tem_assinatura = any('assinatura' in n or 'certificado' in n for n in nomes)
+    # Ajuste conforme regra de negócio:
+    if not tem_minuta:
+        faltantes.append('minuta')
+    if not tem_assinatura:
+        faltantes.append('assinatura')
+    # Exemplo de outras regras:
+    if 'bloqueio' in assunto.lower() or 'bloqueio' in corpo.lower():
+        if not any('bloqueio' in n for n in nomes):
+            faltantes.append('bloqueio')
+    if faltantes:
+        status = 'incompleto'
+    else:
+        status = 'completo'
+    return status, faltantes

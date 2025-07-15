@@ -1,70 +1,64 @@
+// src/App.jsx
+
 import React from "react";
 import { BrowserRouter as Router, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider, useAuth } from "./AuthContext";
 import Login from "./components/Login";
-import TabelaPendentes from "./components/TabelaPendentes";
+import TabelaEsteira from "./components/Tabelaesteira";
 import TabelaProtocolados from "./components/TabelaProtocolados";
 import TabelaReportados from "./components/TabelaReportados";
 import DetalheOficio from "./components/DetalheOficio";
+import Relatorios from "./components/Relatorios";
+import PainelControle from "./components/PainelControle";
+import LayoutPrivado from "./components/LayoutPrivado";
 
-// Componente para rotas protegidas
-function PrivateRoute({ children }) {
-    const { token } = useAuth();
-    return token ? children : <Navigate to="/login" />;
+// Componente para proteger rotas com layout
+function PrivateRoute({ children, withLayout = true }) {
+  const { token, loading } = useAuth();
+
+  if (loading) return <div className="p-6 text-sm">⏳ Verificando autenticação...</div>;
+
+  if (!token) return <Navigate to="/login" replace />;
+
+  return withLayout ? <LayoutPrivado>{children}</LayoutPrivado> : children;
 }
 
-// Redirecionamento inteligente da raiz: manda para login se não autenticado, senão para pendentes
+// Redirecionamento da rota raiz "/"
 function RootRedirect() {
-    const { token } = useAuth();
-    return token ? <Navigate to="/pendentes" /> : <Navigate to="/login" />;
+  const { token, loading } = useAuth();
+
+  if (loading) return <div className="p-6 text-sm">⏳ Carregando...</div>;
+
+  return token ? <Navigate to="/pendentes" replace /> : <Navigate to="/login" replace />;
 }
 
 const App = () => (
-    <AuthProvider>
-        <Router>
-            <Routes>
-                {/* Login é sempre público */}
-                <Route path="/login" element={<Login />} />
-                {/* Rotas protegidas */}
-                <Route
-                    path="/pendentes"
-                    element={
-                        <PrivateRoute>
-                            <TabelaPendentes />
-                        </PrivateRoute>
-                    }
-                />
-                <Route
-                    path="/protocolados"
-                    element={
-                        <PrivateRoute>
-                            <TabelaProtocolados />
-                        </PrivateRoute>
-                    }
-                />
-                <Route
-                    path="/reportados"
-                    element={
-                        <PrivateRoute>
-                            <TabelaReportados />
-                        </PrivateRoute>
-                    }
-                />
-                <Route
-                    path="/oficio/:id_email"
-                    element={
-                        <PrivateRoute>
-                            <DetalheOficio />
-                        </PrivateRoute>
-                    }
-                />
-                {/* Acesso raiz manda para pendentes ou login */}
-                <Route path="/" element={<RootRedirect />} />
-                {/* Qualquer outra rota não existente manda para login */}
-                <Route path="*" element={<Navigate to="/login" />} />
-            </Routes>
-        </Router>
-    </AuthProvider>
+  <AuthProvider>
+    <Router>
+      <Routes>
+        {/* Login (pública) */}
+        <Route path="/login" element={<Login />} />
+
+        {/* Rotas protegidas com layout */}
+        <Route path="/pendentes" element={<PrivateRoute><TabelaEsteira /></PrivateRoute>} />
+        <Route path="/protocolados" element={<PrivateRoute><TabelaProtocolados /></PrivateRoute>} />
+        <Route path="/reportados" element={<PrivateRoute><TabelaReportados /></PrivateRoute>} />
+        <Route path="/relatorios" element={<PrivateRoute><Relatorios /></PrivateRoute>} />
+        <Route path="/painel-controle" element={<PrivateRoute><PainelControle /></PrivateRoute>} />
+
+        {/* Detalhes de ofício → SEM layout */}
+        <Route path="/oficio/:id_email" element={
+          <PrivateRoute withLayout={false}>
+            <DetalheOficio />
+          </PrivateRoute>
+        } />
+
+        {/* Rota raiz e fallback */}
+        <Route path="/" element={<RootRedirect />} />
+        <Route path="*" element={<Navigate to="/login" replace />} />
+      </Routes>
+    </Router>
+  </AuthProvider>
 );
 
 export default App;

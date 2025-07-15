@@ -1,6 +1,7 @@
 // src/components/ReportarDivergencia.jsx
 
 import React, { useState } from "react";
+import { API_BASE } from "../config"; // NOVO: importa a base da API
 
 function ReportarDivergencia({ oficio, onClose, onSucesso }) {
   const [usuario, setUsuario] = useState("");
@@ -20,7 +21,7 @@ function ReportarDivergencia({ oficio, onClose, onSucesso }) {
     formData.append("motivo_manual", motivo);
     formData.append("observacao", obs);
 
-    fetch(`/api/oficios/${oficio.id_email}/reportar`, {
+    fetch(`${API_BASE}/api/oficios/${oficio.id_email}/reportar`, {
       method: "POST",
       body: formData,
     })

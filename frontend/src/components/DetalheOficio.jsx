@@ -1,72 +1,116 @@
-// src/components/DetalheOficio.jsx
-
 import React, { useEffect, useState } from "react";
+import axios from "axios";
+import { API_BASE } from "../config";
 
-function DetalheOficio({ id_email, onClose }) {
+const DetalheOficio = ({ id_email, onClose }) => {
   const [detalhe, setDetalhe] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const [erro, setErro] = useState(null);
+  const token = localStorage.getItem("token");
 
   useEffect(() => {
-    fetch(`/api/oficios/${id_email}`)
-      .then(res => res.json())
-      .then(setDetalhe)
-      .finally(() => setLoading(false));
-  }, [id_email]);
+    async function fetchDetalhe() {
+      try {
+        const response = await axios.get(`${API_BASE}/api/oficios/${id_email}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        setDetalhe(response.data);
+      } catch (err) {
+        setErro("Erro ao carregar detalhes.");
+      }
+    }
+
+    fetchDetalhe();
+  }, [id_email, token]);
+
+  const baixarAnexo = async (idAnexo, nomeArquivo) => {
+    try {
+      const response = await axios.get(`${API_BASE}/api/oficios/anexo/${idAnexo}/download`, {
+        headers: { Authorization: `Bearer ${token}` },
+        responseType: "blob",
+      });
+      const url = window.URL.createObjectURL(new Blob([response.data]));
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = nomeArquivo;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    } catch (error) {
+      alert("Erro ao baixar anexo.");
+    }
+  };
+
+  if (!detalhe) return <div className="p-6">Carregando detalhes...</div>;
+  const { email, respostas, anexos, protocolos } = detalhe;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-40">
-      <div className="bg-white rounded-lg shadow-lg p-6 w-full max-w-2xl relative">
+    <div className="fixed inset-0 z-50 flex justify-center items-center bg-black bg-opacity-40">
+      <div className="bg-white rounded-lg shadow-lg p-6 w-full max-w-3xl relative space-y-6 overflow-y-auto max-h-[90vh]">
         <button className="absolute top-2 right-2 text-gray-500" onClick={onClose}>✕</button>
-        <h3 className="text-xl font-bold mb-2">Detalhes do Ofício</h3>
-        {loading && <p>Carregando...</p>}
-        {detalhe && (
-          <div>
-            <div className="mb-2"><b>Assunto:</b> {detalhe.assunto}</div>
-            <div className="mb-2"><b>Remetente:</b> {detalhe.remetente}</div>
-            <div className="mb-2"><b>Recebido em:</b> {new Date(detalhe.recebido_em).toLocaleString()}</div>
-            <div className="mb-2"><b>Corpo do E-mail:</b><br />{detalhe.corpo_email}</div>
-            <div className="mb-2"><b>Análise IA:</b> {detalhe.acao_sugerida} / {detalhe.motivo} / Coerência: {String(detalhe.coerencia)}</div>
-            <div className="mb-2"><b>Status:</b> {detalhe.status_final}</div>
-            <div className="mb-2">
-              <b>Anexos:</b><br />
-              {(detalhe.anexos || []).map(ax => (
-                <a
-                  key={ax.id_anexo}
-                  href={`/api/oficios/anexo/${ax.id_anexo}/download`}
-                  className="text-blue-600 underline mr-3"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                >{ax.nome_arquivo}</a>
+        <h2 className="text-xl font-bold">📄 Detalhes do Ofício</h2>
+
+        <div>
+          <p><strong>Assunto:</strong> {email.assunto}</p>
+          <p><strong>Remetente:</strong> {email.remetente}</p>
+          <p><strong>Recebido em:</strong> {new Date(email.recebido_em).toLocaleString("pt-BR")}</p>
+          <p><strong>Corpo:</strong></p>
+          <pre className="bg-gray-100 rounded p-2 text-sm">{email.corpo_email}</pre>
+        </div>
+
+        <div>
+          <h3 className="font-bold mb-1">📎 Anexos</h3>
+          {anexos.length > 0 ? (
+            <ul className="list-disc ml-5 text-blue-600 text-sm">
+              {anexos.map(ax => (
+                <li key={ax.id_anexo}>
+                  <button onClick={() => baixarAnexo(ax.id_anexo, ax.nome_arquivo)} className="hover:underline">
+                    {ax.nome_arquivo}
+                  </button>
+                </li>
               ))}
-            </div>
-            {detalhe.protocolos && detalhe.protocolos.length > 0 && (
-              <div className="mb-2">
-                <b>Protocolos:</b>
-                <ul>
-                  {detalhe.protocolos.map(p => (
-                    <li key={p.id_protocolo}>
-                      {p.acao_usuario} por {p.usuario} em {new Date(p.data_registro).toLocaleString()}
-                      {p.nome_arquivo && (
-                        <a
-                          href="#"
-                          onClick={e => {
-                            e.preventDefault();
-                            alert("Download do recibo ainda não implementado (endp. download protocolo)");
-                          }}
-                          className="ml-2 text-blue-500 underline"
-                        >{p.nome_arquivo}</a>
-                      )}
-                      {p.motivo_manual && <span className="ml-2 text-xs text-red-500">Motivo: {p.motivo_manual}</span>}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
-          </div>
-        )}
+            </ul>
+          ) : (
+            <p className="text-sm text-gray-500">Nenhum anexo disponível.</p>
+          )}
+        </div>
+
+        <div>
+          <h3 className="font-bold mb-1">📬 Respostas</h3>
+          {respostas.length > 0 ? (
+            <ul className="list-disc ml-5 text-sm">
+              {respostas.map((r, idx) => (
+                <li key={idx}>
+                  <strong>Status:</strong> {r.status_final} | <strong>Processo:</strong> {r.processo} | <strong>OPAJ:</strong> {r.opaj}
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="text-sm text-gray-500">Nenhuma resposta registrada.</p>
+          )}
+        </div>
+
+        <div>
+          <h3 className="font-bold mb-1">✅ Protocolos</h3>
+          {protocolos.length > 0 ? (
+            <ul className="list-disc ml-5 text-sm">
+              {protocolos.map((p, idx) => (
+                <li key={idx}>
+                  <strong>Usuário:</strong> {p.usuario || p.responsavel} |
+                  <strong> Data:</strong> {new Date(p.data_registro).toLocaleString("pt-BR")} |
+                  <strong> Ação:</strong> {p.acao_usuario}
+                  {p.nome_arquivo && (
+                    <> | <button onClick={() => baixarAnexo(p.id_protocolo, p.nome_arquivo)} className="text-blue-600 hover:underline">{p.nome_arquivo}</button></>
+                  )}
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="text-sm text-gray-500">Nenhum protocolo registrado.</p>
+          )}
+        </div>
       </div>
     </div>
   );
-}
+};
 
 export default DetalheOficio;
